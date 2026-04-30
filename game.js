@@ -24,6 +24,7 @@ let mouse = { x: 0, y: 0 };
 let score = 0;
 let wave = 1;
 let shake = 0;
+let gameOver = false;
 
 // ---------------- MAP WALLS ----------------
 const walls = [
@@ -53,6 +54,8 @@ window.addEventListener("keydown", e => {
 
   if (e.key.toLowerCase() === "r") reload();
   if (e.key.toLowerCase() === "g") throwGrenade();
+
+  if (gameOver && e.code === "Space") restartGame();
 });
 
 window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
@@ -75,6 +78,8 @@ function reload() {
 }
 
 function shoot() {
+  if (gameOver) return;
+
   const now = Date.now();
   const w = weapons[currentWeapon];
 
@@ -100,6 +105,8 @@ function shoot() {
 
 // ---------------- GRENADE ----------------
 function throwGrenade() {
+  if (gameOver) return;
+
   grenades.push({
     x: player.x,
     y: player.y,
@@ -136,12 +143,11 @@ function spawnBoss() {
 // waves
 function startWave() {
   for (let i = 0; i < wave * 5; i++) spawnZombie();
-
   if (wave % 5 === 0) spawnBoss();
 }
 
 setInterval(() => {
-  if (zombies.length === 0) {
+  if (!gameOver && zombies.length === 0) {
     wave++;
     startWave();
   }
@@ -161,7 +167,13 @@ function isCollidingWithWall(x, y) {
 
 // ---------------- UPDATE ----------------
 function update() {
-  // movement with wall collision
+  if (gameOver) {
+    drawGameOver();
+    requestAnimationFrame(update);
+    return;
+  }
+
+  // movement
   let nx = player.x;
   let ny = player.y;
 
@@ -242,8 +254,7 @@ function update() {
   });
 
   if (player.hp <= 0) {
-    alert("Game Over! Score: " + score);
-    location.reload();
+    gameOver = true;
   }
 
   draw();
@@ -285,7 +296,7 @@ function draw() {
   ctx.fillStyle = "yellow";
   bullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 4));
 
-  // zombies + HP bar
+  // zombies + hp bar
   zombies.forEach(z => {
     ctx.fillStyle = z.boss ? "purple" : (z.speed > 1.5 ? "red" : "green");
     ctx.fillRect(z.x, z.y, z.size, z.size);
@@ -305,6 +316,38 @@ function draw() {
 
   document.getElementById("stats").innerText =
     `HP: ${Math.floor(player.hp)} | Score: ${score} | Wave: ${wave} | Ammo: ${ammo}`;
+}
+
+// ---------------- GAME OVER SCREEN ----------------
+function drawGameOver() {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "white";
+  ctx.font = "50px Arial";
+  ctx.fillText("GAME OVER", canvas.width / 2 - 150, canvas.height / 2);
+
+  ctx.font = "25px Arial";
+  ctx.fillText("Score: " + score, canvas.width / 2 - 60, canvas.height / 2 + 50);
+  ctx.fillText("Press SPACE to restart", canvas.width / 2 - 140, canvas.height / 2 + 100);
+}
+
+// ---------------- RESTART ----------------
+function restartGame() {
+  player.x = canvas.width / 2;
+  player.y = canvas.height / 2;
+  player.hp = 100;
+
+  bullets = [];
+  zombies = [];
+  particles = [];
+  grenades = [];
+
+  score = 0;
+  wave = 1;
+  gameOver = false;
+
+  startWave();
 }
 
 update();
