@@ -4,58 +4,68 @@ const ctx = canvas.getContext("2d");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// ---------------- PLAYER ----------------
+// ===================== GAME STATE =====================
+let state = "menu"; // menu, playing, paused, gameover
+
+// ===================== PLAYER =====================
 const player = {
   x: canvas.width / 2,
   y: canvas.height / 2,
   size: 20,
   speed: 4,
-  hp: 100
+  hp: 100,
+  maxHp: 100
 };
 
-// ---------------- STATE ----------------
+// ===================== GLOBALS =====================
 let bullets = [];
 let zombies = [];
 let particles = [];
 let grenades = [];
-let keys = {};
-let mouse = { x: 0, y: 0 };
+let loot = [];
 
 let score = 0;
 let wave = 1;
-let shake = 0;
-let gameOver = false;
+let xp = 0;
+let level = 1;
 
-// shooting / reload state
+let highScore = localStorage.getItem("zombieHS") || 0;
+
+let keys = {};
+let mouse = { x: 0, y: 0 };
+
 let firing = false;
 let isReloading = false;
 let reloadTimer = 0;
 
-let ammo = 0;
-let lastShot = 0;
+let shake = 0;
 
-// ---------------- MAP ----------------
-const walls = [
-  { x: 300, y: 200, w: 200, h: 20 },
-  { x: 600, y: 400, w: 20, h: 200 },
-  { x: 900, y: 150, w: 150, h: 20 }
-];
-
-// ---------------- WEAPONS ----------------
+// ===================== WEAPONS =====================
 const weapons = {
-  pistol:  { fireRate: 300, damage: 25, bullets: 1, spread: 0.05, mag: 12, reloadTime: 3 },
-  shotgun: { fireRate: 900, damage: 12, bullets: 6, spread: 0.4, mag: 6, reloadTime: 5 },
-  rifle:   { fireRate: 100, damage: 18, bullets: 1, spread: 0.02, mag: 30, reloadTime: 4 }
+  pistol:  { fireRate: 300, damage: 25, bullets: 1, spread: 0.05, mag: 12, reloadTime: 3, recoil: 2 },
+  shotgun: { fireRate: 900, damage: 12, bullets: 6, spread: 0.4, mag: 6, reloadTime: 5, recoil: 6 },
+  rifle:   { fireRate: 100, damage: 18, bullets: 1, spread: 0.02, mag: 30, reloadTime: 4, recoil: 1 }
 };
 
 let currentWeapon = "pistol";
-ammo = weapons[currentWeapon].mag;
 
-// ---------------- INPUT ----------------
+// ===================== NEW AMMO SYSTEM (PER GUN SAVE) =====================
+let ammoStore = {
+  pistol: weapons.pistol.mag,
+  shotgun: weapons.shotgun.mag,
+  rifle: weapons.rifle.mag
+};
+
+let lastShot = 0;
+
+// ===================== INPUT =====================
 window.addEventListener("keydown", e => {
   keys[e.key.toLowerCase()] = true;
 
   if (e.key.toLowerCase() === "e") firing = true;
+
+  if (state === "menu" && e.code === "Space") startGame();
+  if (state === "gameover" && e.code === "Space") restartGame();
 
   if (e.key === "1") switchWeapon("pistol");
   if (e.key === "2") switchWeapon("shotgun");
@@ -64,7 +74,9 @@ window.addEventListener("keydown", e => {
   if (e.key.toLowerCase() === "r") reload();
   if (e.key.toLowerCase() === "g") throwGrenade();
 
-  if (gameOver && e.code === "Space") restartGame();
+  if (e.key === "Escape") {
+    state = state === "playing" ? "paused" : "playing";
+  }
 });
 
 window.addEventListener("keyup", e => {
@@ -77,29 +89,42 @@ canvas.addEventListener("mousemove", e => {
   mouse.y = e.clientY;
 });
 
-// ---------------- WEAPON CONTROL ----------------
+// ===================== WEAPON SYSTEM =====================
 function switchWeapon(name) {
   currentWeapon = name;
-  ammo = weapons[name].mag;
 }
 
+// ===================== SMART RELOAD (YOUR MATH SYSTEM) =====================
 function reload() {
+  const w = weapons[currentWeapon];
+  const currentAmmo = ammoStore[currentWeapon];
+
+  // already full mag
+  if (currentAmmo >= w.mag) return;
+
   if (isReloading) return;
 
+  const missing = w.mag - currentAmmo;
+  const fraction = missing / w.mag;
+
+  const totalFrames = w.reloadTime * 60;
+  reloadTimer = Math.floor(totalFrames * fraction);
+
   isReloading = true;
-  reloadTimer = weapons[currentWeapon].reloadTime * 60;
 }
 
+// ===================== SHOOT =====================
 function shoot() {
-  if (gameOver || isReloading) return;
+  if (state !== "playing") return;
+  if (isReloading) return;
 
-  const now = Date.now();
   const w = weapons[currentWeapon];
+  const now = Date.now();
 
   if (now - lastShot < w.fireRate) return;
-  if (ammo <= 0) return;
+  if (ammoStore[currentWeapon] <= 0) return;
 
-  ammo--;
+  ammoStore[currentWeapon]--;
   lastShot = now;
 
   for (let i = 0; i < w.bullets; i++) {
@@ -114,11 +139,13 @@ function shoot() {
       damage: w.damage
     });
   }
+
+  shake = w.recoil;
 }
 
-// ---------------- GRENADE ----------------
+// ===================== GRENADE =====================
 function throwGrenade() {
-  if (gameOver) return;
+  if (state !== "playing") return;
 
   grenades.push({
     x: player.x,
@@ -127,84 +154,43 @@ function throwGrenade() {
   });
 }
 
-// ---------------- ZOMBIES ----------------
+// ===================== ZOMBIES =====================
 function spawnZombie() {
-  let side = Math.floor(Math.random() * 4);
-  let speed = Math.random() < 0.2 ? 2 : 1;
-
-  let x, y;
-  if (side === 0) { x = 0; y = Math.random() * canvas.height; }
-  if (side === 1) { x = canvas.width; y = Math.random() * canvas.height; }
-  if (side === 2) { x = Math.random() * canvas.width; y = 0; }
-  if (side === 3) { x = Math.random() * canvas.width; y = canvas.height; }
-
-  zombies.push({ x, y, size: 20, speed, hp: 50 });
-}
-
-function spawnBoss() {
   zombies.push({
-    x: 100,
-    y: 100,
-    size: 60,
-    speed: 0.6,
-    hp: 500,
-    boss: true
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    size: 20,
+    hp: 50,
+    speed: 1
   });
 }
 
+// ===================== WAVES =====================
 function startWave() {
   for (let i = 0; i < wave * 5; i++) spawnZombie();
-  if (wave % 5 === 0) spawnBoss();
 }
 
-setInterval(() => {
-  if (!gameOver && zombies.length === 0) {
-    wave++;
-    startWave();
-  }
-}, 2000);
-
-startWave();
-
-// ---------------- COLLISION ----------------
-function isCollidingWithWall(x, y) {
-  return walls.some(w =>
-    x < w.x + w.w &&
-    x + player.size > w.x &&
-    y < w.y + w.h &&
-    y + player.size > w.y
-  );
-}
-
-// ---------------- UPDATE ----------------
+// ===================== GAME LOOP =====================
 function update() {
-  if (gameOver) {
-    drawGameOver();
-    requestAnimationFrame(update);
-    return;
-  }
+  requestAnimationFrame(update);
+
+  if (state === "menu") return drawMenu();
+  if (state === "paused") return drawPause();
+  if (state === "gameover") return drawGameOver();
 
   // movement
-  let nx = player.x;
-  let ny = player.y;
+  if (keys["w"]) player.y -= player.speed;
+  if (keys["s"]) player.y += player.speed;
+  if (keys["a"]) player.x -= player.speed;
+  if (keys["d"]) player.x += player.speed;
 
-  if (keys["w"]) ny -= player.speed;
-  if (keys["s"]) ny += player.speed;
-  if (keys["a"]) nx -= player.speed;
-  if (keys["d"]) nx += player.speed;
-
-  if (!isCollidingWithWall(nx, player.y)) player.x = nx;
-  if (!isCollidingWithWall(player.x, ny)) player.y = ny;
-
-  // auto fire
   if (firing) shoot();
 
-  // reload timer
+  // reload logic
   if (isReloading) {
     reloadTimer--;
-
     if (reloadTimer <= 0) {
-      ammo = weapons[currentWeapon].mag;
+      ammoStore[currentWeapon] = weapons[currentWeapon].mag;
       isReloading = false;
     }
   }
@@ -213,10 +199,33 @@ function update() {
   bullets.forEach((b, i) => {
     b.x += b.dx;
     b.y += b.dy;
-
-    if (b.x < 0 || b.y < 0 || b.x > canvas.width || b.y > canvas.height) {
+    if (b.x < 0 || b.y < 0 || b.x > canvas.width || b.y > canvas.height)
       bullets.splice(i, 1);
-    }
+  });
+
+  // zombies AI
+  zombies.forEach((z, zi) => {
+    let dx = player.x - z.x;
+    let dy = player.y - z.y;
+    let dist = Math.hypot(dx, dy);
+
+    z.x += (dx / dist) * z.speed;
+    z.y += (dy / dist) * z.speed;
+
+    if (dist < 20) player.hp -= 0.5;
+
+    bullets.forEach((b, bi) => {
+      if (Math.hypot(b.x - z.x, b.y - z.y) < 15) {
+        z.hp -= b.damage;
+        bullets.splice(bi, 1);
+
+        if (z.hp <= 0) {
+          zombies.splice(zi, 1);
+          score += 10;
+          xp += 20;
+        }
+      }
+    });
   });
 
   // grenades
@@ -224,18 +233,9 @@ function update() {
     g.timer--;
 
     if (g.timer <= 0) {
-      shake = 10;
-
       zombies.forEach((z, zi) => {
-        let d = Math.hypot(g.x - z.x, g.y - z.y);
-        if (d < 120) {
+        if (Math.hypot(z.x - g.x, z.y - g.y) < 120) {
           z.hp -= 100;
-          createBlood(z.x, z.y);
-
-          if (z.hp <= 0) {
-            zombies.splice(zi, 1);
-            score += 20;
-          }
         }
       });
 
@@ -243,138 +243,108 @@ function update() {
     }
   });
 
-  // zombies
-  zombies.forEach((z, zi) => {
-    let angle = Math.atan2(player.y - z.y, player.x - z.x);
-    z.x += Math.cos(angle) * z.speed;
-    z.y += Math.sin(angle) * z.speed;
+  // level system
+  if (xp >= level * 100) {
+    xp = 0;
+    level++;
+    player.hp = player.maxHp;
+  }
 
-    if (Math.hypot(player.x - z.x, player.y - z.y) < 20) {
-      player.hp -= z.boss ? 1.5 : 0.5;
-      shake = 5;
-    }
+  // wave system
+  if (zombies.length === 0) {
+    wave++;
+    startWave();
+  }
 
-    bullets.forEach((b, bi) => {
-      if (Math.hypot(b.x - z.x, b.y - z.y) < 15) {
-        z.hp -= b.damage;
-        bullets.splice(bi, 1);
-        createBlood(z.x, z.y);
-
-        if (z.hp <= 0) {
-          zombies.splice(zi, 1);
-          score += z.boss ? 100 : 10;
-        }
-      }
-    });
-  });
-
-  // particles
-  particles.forEach((p, pi) => {
-    p.x += p.dx;
-    p.y += p.dy;
-    p.life--;
-
-    if (p.life <= 0) particles.splice(pi, 1);
-  });
-
-  if (player.hp <= 0) gameOver = true;
+  if (player.hp <= 0) {
+    state = "gameover";
+    highScore = Math.max(highScore, score);
+    localStorage.setItem("zombieHS", highScore);
+  }
 
   draw();
-  requestAnimationFrame(update);
 }
 
-// ---------------- BLOOD ----------------
-function createBlood(x, y) {
-  for (let i = 0; i < 10; i++) {
-    particles.push({
-      x,
-      y,
-      dx: (Math.random() - 0.5) * 4,
-      dy: (Math.random() - 0.5) * 4,
-      life: 30
-    });
-  }
-}
-
-// ---------------- DRAW ----------------
+// ===================== DRAW =====================
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  if (shake > 0) {
-    ctx.save();
-    ctx.translate(Math.random() * shake, Math.random() * shake);
-    shake -= 0.3;
-  }
-
-  // walls
-  ctx.fillStyle = "#444";
-  walls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
 
   // player
   ctx.fillStyle = "cyan";
   ctx.fillRect(player.x, player.y, player.size, player.size);
 
+  // zombies
+  ctx.fillStyle = "green";
+  zombies.forEach(z => ctx.fillRect(z.x, z.y, z.size, z.size));
+
   // bullets
   ctx.fillStyle = "yellow";
   bullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 4));
 
-  // zombies
-  zombies.forEach(z => {
-    ctx.fillStyle = z.boss ? "purple" : "green";
-    ctx.fillRect(z.x, z.y, z.size, z.size);
-
-    ctx.fillStyle = "black";
-    ctx.fillRect(z.x, z.y - 6, z.size, 4);
-
-    ctx.fillStyle = "lime";
-    ctx.fillRect(z.x, z.y - 6, (z.hp / (z.boss ? 500 : 50)) * z.size, 4);
-  });
-
-  // particles
+  // grenades
   ctx.fillStyle = "red";
-  particles.forEach(p => ctx.fillRect(p.x, p.y, 2, 2));
+  grenades.forEach(g => ctx.fillRect(g.x, g.y, 6, 6));
 
-  if (shake > 0) ctx.restore();
-
-  let reloadText = isReloading ? ` | Reloading (${Math.ceil(reloadTimer / 60)})` : "";
+  let reloadText = isReloading
+    ? ` Reload(${Math.ceil(reloadTimer / 60)})`
+    : "";
 
   document.getElementById("stats").innerText =
-    `HP: ${Math.floor(player.hp)} | Score: ${score} | Wave: ${wave} | Ammo: ${ammo}${reloadText}`;
+    `HP:${player.hp} Score:${score} HS:${highScore} Wave:${wave} Lvl:${level}
+Ammo:${ammoStore[currentWeapon]}/${weapons[currentWeapon].mag}${reloadText}`;
 }
 
-// ---------------- GAME OVER ----------------
+// ===================== MENUS =====================
+function drawMenu() {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "white";
+  ctx.font = "40px Arial";
+  ctx.fillText("ZOMBIE SURVIVAL", 300, 300);
+  ctx.fillText("Press SPACE", 350, 360);
+}
+
+function drawPause() {
+  draw();
+  ctx.fillStyle = "white";
+  ctx.fillText("PAUSED", 400, 300);
+}
+
 function drawGameOver() {
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = "white";
-  ctx.font = "50px Arial";
-  ctx.fillText("GAME OVER", canvas.width / 2 - 150, canvas.height / 2);
-
-  ctx.font = "25px Arial";
-  ctx.fillText("Score: " + score, canvas.width / 2 - 60, canvas.height / 2 + 50);
-  ctx.fillText("Press SPACE to restart", canvas.width / 2 - 140, canvas.height / 2 + 100);
+  ctx.font = "40px Arial";
+  ctx.fillText("GAME OVER", 350, 300);
+  ctx.fillText("Score: " + score, 350, 350);
+  ctx.fillText("Press SPACE", 350, 400);
 }
 
-// ---------------- RESTART ----------------
+// ===================== CONTROL =====================
+function startGame() {
+  state = "playing";
+  startWave();
+}
+
 function restartGame() {
-  player.x = canvas.width / 2;
-  player.y = canvas.height / 2;
   player.hp = 100;
+  score = 0;
+  wave = 1;
+  xp = 0;
+  level = 1;
 
   bullets = [];
   zombies = [];
-  particles = [];
   grenades = [];
 
-  score = 0;
-  wave = 1;
-  gameOver = false;
+  ammoStore = {
+    pistol: weapons.pistol.mag,
+    shotgun: weapons.shotgun.mag,
+    rifle: weapons.rifle.mag
+  };
 
-  ammo = weapons[currentWeapon].mag;
-  isReloading = false;
-  reloadTimer = 0;
-
+  state = "playing";
   startWave();
 }
 
