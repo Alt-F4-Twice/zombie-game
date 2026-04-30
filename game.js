@@ -26,7 +26,15 @@ let wave = 1;
 let shake = 0;
 let gameOver = false;
 
-// ---------------- MAP WALLS ----------------
+// shooting / reload state
+let firing = false;
+let isReloading = false;
+let reloadTimer = 0;
+
+let ammo = 0;
+let lastShot = 0;
+
+// ---------------- MAP ----------------
 const walls = [
   { x: 300, y: 200, w: 200, h: 20 },
   { x: 600, y: 400, w: 20, h: 200 },
@@ -35,18 +43,19 @@ const walls = [
 
 // ---------------- WEAPONS ----------------
 const weapons = {
-  pistol:  { fireRate: 400, damage: 25, bullets: 1, spread: 0.05, mag: 12 },
-  shotgun: { fireRate: 800, damage: 12, bullets: 6, spread: 0.4, mag: 6 },
-  rifle:   { fireRate: 120, damage: 18, bullets: 1, spread: 0.02, mag: 30 }
+  pistol:  { fireRate: 300, damage: 25, bullets: 1, spread: 0.05, mag: 12, reloadTime: 3 },
+  shotgun: { fireRate: 900, damage: 12, bullets: 6, spread: 0.4, mag: 6, reloadTime: 5 },
+  rifle:   { fireRate: 100, damage: 18, bullets: 1, spread: 0.02, mag: 30, reloadTime: 4 }
 };
 
 let currentWeapon = "pistol";
-let ammo = weapons[currentWeapon].mag;
-let lastShot = 0;
+ammo = weapons[currentWeapon].mag;
 
 // ---------------- INPUT ----------------
 window.addEventListener("keydown", e => {
   keys[e.key.toLowerCase()] = true;
+
+  if (e.key.toLowerCase() === "e") firing = true;
 
   if (e.key === "1") switchWeapon("pistol");
   if (e.key === "2") switchWeapon("shotgun");
@@ -58,27 +67,31 @@ window.addEventListener("keydown", e => {
   if (gameOver && e.code === "Space") restartGame();
 });
 
-window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+window.addEventListener("keyup", e => {
+  keys[e.key.toLowerCase()] = false;
+  if (e.key.toLowerCase() === "e") firing = false;
+});
 
 canvas.addEventListener("mousemove", e => {
   mouse.x = e.clientX;
   mouse.y = e.clientY;
 });
 
-canvas.addEventListener("click", shoot);
-
-// ---------------- WEAPON SYSTEM ----------------
+// ---------------- WEAPON CONTROL ----------------
 function switchWeapon(name) {
   currentWeapon = name;
   ammo = weapons[name].mag;
 }
 
 function reload() {
-  ammo = weapons[currentWeapon].mag;
+  if (isReloading) return;
+
+  isReloading = true;
+  reloadTimer = weapons[currentWeapon].reloadTime * 60;
 }
 
 function shoot() {
-  if (gameOver) return;
+  if (gameOver || isReloading) return;
 
   const now = Date.now();
   const w = weapons[currentWeapon];
@@ -128,7 +141,6 @@ function spawnZombie() {
   zombies.push({ x, y, size: 20, speed, hp: 50 });
 }
 
-// 💀 Boss
 function spawnBoss() {
   zombies.push({
     x: 100,
@@ -140,7 +152,6 @@ function spawnBoss() {
   });
 }
 
-// waves
 function startWave() {
   for (let i = 0; i < wave * 5; i++) spawnZombie();
   if (wave % 5 === 0) spawnBoss();
@@ -184,6 +195,19 @@ function update() {
 
   if (!isCollidingWithWall(nx, player.y)) player.x = nx;
   if (!isCollidingWithWall(player.x, ny)) player.y = ny;
+
+  // auto fire
+  if (firing) shoot();
+
+  // reload timer
+  if (isReloading) {
+    reloadTimer--;
+
+    if (reloadTimer <= 0) {
+      ammo = weapons[currentWeapon].mag;
+      isReloading = false;
+    }
+  }
 
   // bullets
   bullets.forEach((b, i) => {
@@ -253,9 +277,7 @@ function update() {
     if (p.life <= 0) particles.splice(pi, 1);
   });
 
-  if (player.hp <= 0) {
-    gameOver = true;
-  }
+  if (player.hp <= 0) gameOver = true;
 
   draw();
   requestAnimationFrame(update);
@@ -296,9 +318,9 @@ function draw() {
   ctx.fillStyle = "yellow";
   bullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 4));
 
-  // zombies + hp bar
+  // zombies
   zombies.forEach(z => {
-    ctx.fillStyle = z.boss ? "purple" : (z.speed > 1.5 ? "red" : "green");
+    ctx.fillStyle = z.boss ? "purple" : "green";
     ctx.fillRect(z.x, z.y, z.size, z.size);
 
     ctx.fillStyle = "black";
@@ -314,11 +336,13 @@ function draw() {
 
   if (shake > 0) ctx.restore();
 
+  let reloadText = isReloading ? ` | Reloading (${Math.ceil(reloadTimer / 60)})` : "";
+
   document.getElementById("stats").innerText =
-    `HP: ${Math.floor(player.hp)} | Score: ${score} | Wave: ${wave} | Ammo: ${ammo}`;
+    `HP: ${Math.floor(player.hp)} | Score: ${score} | Wave: ${wave} | Ammo: ${ammo}${reloadText}`;
 }
 
-// ---------------- GAME OVER SCREEN ----------------
+// ---------------- GAME OVER ----------------
 function drawGameOver() {
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -346,6 +370,10 @@ function restartGame() {
   score = 0;
   wave = 1;
   gameOver = false;
+
+  ammo = weapons[currentWeapon].mag;
+  isReloading = false;
+  reloadTimer = 0;
 
   startWave();
 }
